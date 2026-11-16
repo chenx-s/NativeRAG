@@ -30,6 +30,30 @@ def _env_bool(key: str, default: str = "false") -> bool:
     return os.getenv(key, default).strip().lower() in ("true", "1", "yes", "on")
 
 
+def _is_placeholder(value: str) -> bool:
+    """判断一个配置值是否为「未填写」的占位符（如「请填写…」「YOUR_…」）。
+
+    空字符串、以及带「请填写 / 你的 / your / example」等字样的值都视为未配置。
+    这样 COHERE_API_KEY=请填写… 会被正确识别为「没配」，而不是当成真 key 去调用。
+    """
+    text = (value or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    return any(
+        hint in lowered
+        for hint in ("请填写", "你的", "your", "example", "xxx", "todo", "fill")
+    )
+
+
+# LangSmith 追踪：占位符 key（如「请填写…」）会让 LangChain 反复尝试上报并刷屏报错，
+# 进程启动早期就把它禁用，避免噪音和无效网络请求。配了真 key 则不受影响。
+if _is_placeholder(os.environ.get("LANGSMITH_API_KEY", "")):
+    os.environ["LANGSMITH_TRACING"] = "false"
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    os.environ.pop("LANGSMITH_API_KEY", None)
+
+
 class Settings:
     """全局配置的唯一来源。
 
@@ -54,6 +78,10 @@ class Settings:
     )
     LLM_MODEL_NAME: str = os.getenv("LLM_MODEL", "glm-4.5-air")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", 0.0))
+    # 智谱 GLM 专属：关闭思考模式（extra_body={"thinking":{"type":"disabled"}}）。
+    # 其它模型（DeepSeek 等）不认识这个参数，发了可能被拒绝，所以默认不发送；
+    # 接 GLM 时在 .env 设 LLM_DISABLE_THINKING=true 才会加上。
+    LLM_DISABLE_THINKING: bool = _env_bool("LLM_DISABLE_THINKING", "false")
 
     # ------------------------------------------------------------ Embedding
     # 默认 BAAI/bge-m3：多语言（中英混排效果好）、1024 维、最长 8192 token，约 2.2GB，CPU 可跑。
@@ -254,17 +282,17 @@ class Settings:
 
     @property
     def rerank_ready(self) -> bool:
-        """精排是否真的可用（开关打开 + 有 Key）。"""
+        """精排是否真的可用（开关打开 + 配了有效的 Key，占位符视为未配置）。"""
         if not self.RERANK_ENABLED:
             return False
         if self.RERANK_PROVIDER == "cohere":
-            return bool(self.COHERE_API_KEY)
+            return not _is_placeholder(self.COHERE_API_KEY)
         return False
 
     @property
     def web_search_ready(self) -> bool:
-        """联网搜索是否真的可用（开关打开 + 配了 Tavily Key）。"""
-        return self.WEB_SEARCH_ENABLED and bool((self.TAVILY_API_KEY or "").strip())
+        """联网搜索是否真的可用（开关打开 + 配了有效的 Tavily Key，占位符视为未配置）。"""
+        return self.WEB_SEARCH_ENABLED and not _is_placeholder(self.TAVILY_API_KEY)
 
 
 settings = Settings()

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RAG 知识库问答</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- 顶部状态栏 -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">◈</span>
+      <div class="brand-text">
+        <h1>RAG 知识库问答</h1>
+        <span class="subtitle">Agentic RAG · 混合检索 + 精排 + 联网纠错 + 忠实性自检</span>
+      </div>
+    </div>
+
+    <div class="status-pills" id="statusPills" aria-live="polite">
+      <!-- 由 app.js 填充 -->
+    </div>
+
+    <div class="topbar-actions">
+      <input
+        type="password"
+        class="token-input"
+        id="tokenInput"
+        placeholder="API Token（可选）"
+        autocomplete="off"
+        spellcheck="false"
+      >
+      <button class="icon-btn" id="themeToggle" title="切换明暗主题" aria-label="切换明暗主题">🌙</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- 左侧：知识库管理 -->
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <h2>知识库</h2>
+        <button class="icon-btn" id="refreshDocs" title="刷新" aria-label="刷新">⟳</button>
+      </div>
+
+      <div class="sidebar-actions">
+        <label class="btn btn-primary" for="fileInput">上传文档</label>
+        <input type="file" id="fileInput" hidden>
+        <button class="btn btn-ghost" id="scanBtn">扫描 data/</button>
+      </div>
+
+      <div class="sidebar-stats" id="docStats"></div>
+
+      <div class="doc-list" id="docList"></div>
+
+      <div class="sidebar-foot">
+        <button class="link-danger" id="reindexBtn">重建索引</button>
+        <span class="dot-sep">·</span>
+        <button class="link-danger" id="clearIndexBtn">清空全部</button>
+      </div>
+    </aside>
+
+    <!-- 中央：聊天区 -->
+    <main class="chat">
+      <div class="messages" id="messages">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">◈</div>
+          <h3>向你的知识库提问</h3>
+          <p>服务会先查本地知识库，找不到相关内容时自动转为联网搜索，<br>并逐条核对答案出处。</p>
+          <div class="samples">
+            <button class="sample" data-q="知识库里有哪些文档？">知识库里有哪些文档？</button>
+            <button class="sample" data-q="用一段话介绍这个项目的检索流程">用一段话介绍检索流程</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="composer-options">
+          <label class="toggle">
+            <input type="checkbox" id="allowWeb" checked>
+            <span>允许联网</span>
+          </label>
+          <input
+            type="text"
+            id="sessionInput"
+            class="session-input"
+            placeholder="会话 ID（可选，同一 ID 保留多轮记忆）"
+            autocomplete="off"
+            spellcheck="false"
+          >
+        </div>
+        <div class="composer-row">
+          <textarea
+            id="questionInput"
+            rows="1"
+            placeholder="输入问题，Enter 发送，Shift+Enter 换行"
+            aria-label="问题输入框"
+          ></textarea>
+          <button class="btn btn-primary send-btn" id="sendBtn">发送</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

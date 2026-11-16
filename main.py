@@ -19,6 +19,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from redis_fastapi import AsyncRedisDep, FastAPIRedis
 
 from app.api.openai_compat import build_router as build_openai_router
@@ -97,6 +99,16 @@ app.include_router(system.router)
 app.include_router(query.router)
 app.include_router(documents.router)
 app.include_router(build_openai_router(lambda: runtime.rag))
+
+# 前端页面：同一进程托管，同源访问，无需 CORS。静态资源在 /static/ 下。
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def serve_index():
+    """托管前端页面（RAG 知识库问答的可视化界面）。"""
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/items", dependencies=AUTH, include_in_schema=False)

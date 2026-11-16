@@ -15,19 +15,24 @@ from app.llm_cache import get_llm_cache
 
 
 def get_llm(**kwargs) -> ChatOpenAI:
-    """创建大模型客户端（智谱 GLM，走 OpenAI 兼容协议）。
+    """创建大模型客户端（走 OpenAI 兼容协议，可接智谱 GLM / DeepSeek 等）。
 
     cache 挂的是 Redis LLM 缓存：提示词和模型配置完全相同的调用直接命中，
-    Redis 不可用时自动旁路。thinking 关掉是因为 GLM 的思考模式会拖慢
-    评分/路由这类只需要一个词的调用，且思考内容会混进输出。
+    Redis 不可用时自动旁路。
+
+    thinking 关闭（extra_body={"thinking": {"type": "disabled"}}）是智谱 GLM 的
+    专属参数：GLM 的思考模式会拖慢评分/路由这类只需要一个词的调用，且思考内容
+    会混进输出。其它模型（DeepSeek 等）不认识这个参数，发了可能被拒绝，
+    所以默认不发送；接 GLM 时在 .env 设 LLM_DISABLE_THINKING=true 才会加上。
     """
+    kwargs.setdefault("temperature", settings.LLM_TEMPERATURE)
+    if settings.LLM_DISABLE_THINKING:
+        kwargs.setdefault("extra_body", {"thinking": {"type": "disabled"}})
     return ChatOpenAI(
         model=settings.LLM_MODEL_NAME,
         api_key=settings.OPENAI_API_KEY,
         base_url=settings.OPENAI_BASE_URL,
-        temperature=settings.LLM_TEMPERATURE,
         cache=get_llm_cache(),
-        extra_body={"thinking": {"type": "disabled"}},
         **kwargs,
     )
 
@@ -51,9 +56,9 @@ def get_reranker():
         print(f"    [warn] 未知的 RERANK_PROVIDER={settings.RERANK_PROVIDER}，跳过精排")
         return None
 
-    if not settings.COHERE_API_KEY:
+    if not settings.rerank_ready:
         print(
-            "    [warn] 未配置 COHERE_API_KEY，跳过精排。"
+            "    [warn] 未配置有效的 COHERE_API_KEY（或为占位符），跳过精排。"
             "申请地址：https://dashboard.cohere.com/api-keys（Rerank 有免费额度）"
         )
         return None
