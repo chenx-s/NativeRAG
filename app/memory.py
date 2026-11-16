@@ -304,7 +304,7 @@ def _format_turns_for_summary(turns: List[Turn]) -> str:
 class MemoryManager:
     """会话记忆的读写入口（加载 / 追加并压缩 / 清除）。
 
-    llm_factory: 返回 ChatModel 的函数（由 rag_chain 注入 get_llm，避免循环导入）。
+    llm_factory: 返回 ChatModel 的函数（由 RAGChain 注入 get_llm，避免循环导入）。
     store 为 None 表示记忆已关闭：读返回空记忆，写什么都不做。
     """
 

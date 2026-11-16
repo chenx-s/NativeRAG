@@ -19,8 +19,11 @@
 | 防幻觉 | LLM 逐条评估文档相关性 + 答案忠实性自检，未通过时改用严格模式重新生成 |
 | 记忆 | 滚动摘要加最近 N 轮原文，持久化到 SQLite 或 Redis |
 | 上下文工程 | 对历史和资料做选择、压缩，并分区隔离，所有内容都在字符预算内 |
+| 流式输出 | SSE 推送节点进度与逐段答案；草稿未通过核对时自动撤回并重写 |
+| 前端接入 | OpenAI 兼容接口 `/v1/chat/completions`，可直接接 Open WebUI、Chatbox、LobeChat |
+| 文档管理 | 按内容哈希去重、同名文件自动替换旧版本、按文档删除、后台入库队列、一键重建索引 |
 | LLM | 智谱 GLM `glm-4.5-air`，走 OpenAI 兼容协议，可替换为任意兼容端点 |
-| Embedding | 本地运行 `BAAI/bge-small-en-v1.5`，不依赖外部 API |
+| Embedding | 本地运行 `BAAI/bge-m3`（多语言，中文效果好），不依赖外部 API |
 | 工程化 | 接入 Redis LLM 响应缓存（Redis 故障时自动绕过）、Prometheus 指标、Docker Compose、RAGAs 离线评估 |
 
 ---
@@ -73,33 +76,42 @@
 
 ```text
 .
-├── main.py                   # FastAPI 入口（全部 HTTP 接口）
+├── main.py                   # FastAPI 入口：创建应用、生命周期、挂载路由（约 100 行）
 ├── app/
 │   ├── config.py             # 全局配置：唯一的配置来源（读取 .env）
-│   ├── rag_chain.py          # LangGraph 状态图：节点、路由、提示词、RAGChain 封装
-│   ├── vector_store.py       # Milvus + BM25 混合检索、RRF 融合、入库/清库
-│   ├── web_search.py         # Tavily 联网搜索：故障分类、退避重试、结果转 Document
-│   ├── context.py            # 上下文工程：对话背景渲染、资料预算裁剪
+│   ├── rag/                  # ★ Agentic RAG 状态图
+│   │   ├── chain.py          #   RAGChain：对外入口（记忆、流式事件、结果整理）
+│   │   ├── graph.py          #   组装状态图、节点中文名
+│   │   ├── edges.py          #   条件路由（纯函数）
+│   │   ├── nodes/            #   节点：route / retrieval / web / generation
+│   │   ├── state.py          #   GraphState
+│   │   ├── prompts.py        #   全部提示词
+│   │   ├── helpers.py        #   解析、上下文拼装、联网判定等纯函数
+│   │   └── llm.py            #   LLM / 精排器
+│   ├── retrieval/            # ★ 检索层：embeddings / milvus / corpus / bm25 / fusion / search / store
+│   ├── api/                  # ★ HTTP 接口层
+│   │   ├── routes/           #   system（健康）/ query（问答）/ documents（文档管理）
+│   │   ├── openai_compat.py  #   OpenAI 兼容接口 /v1
+│   │   ├── schemas.py        #   请求 / 响应模型
+│   │   ├── runtime.py        #   运行时单例
+│   │   ├── security.py       #   Bearer Token 鉴权
+│   │   └── sse.py            #   SSE 工具
+│   ├── vector_store.py       # 检索层门面（统一入口 + 异步版本）
+│   ├── documents.py          # 文档登记、去重、版本替换、后台入库队列
 │   ├── memory.py             # 会话记忆：滚动摘要压缩、SQLite / Redis 持久化
-│   ├── document_processer.py # 文档加载与分块（pdf/txt/md/docx/html/htm/csv）
-│   ├── llm_cache.py          # Redis LLM 响应缓存（故障自动旁路）
-│   ├── redis_client.py       # 异步 Redis 连接池
-│   └── observability.py      # Prometheus 指标
-├── research_agent/
-│   ├── agent.py              # 命令行多轮对话（会话管理 + 执行轨迹展示）
-│   └── settings.py           # CLI 自身配置
+│   ├── context.py            # 上下文工程：对话背景渲染、资料预算裁剪
+│   ├── web_search.py         # Tavily 联网搜索
+│   ├── document_processer.py # 文档加载与分块
+│   └── llm_cache.py · redis_client.py · observability.py
+├── research_agent/           # 命令行多轮对话
 ├── tests/                    # 单元测试（mock 网络 / Milvus / LLM，可离线运行）
-├── eval_ragas.py             # RAGAs 离线评估
-├── eval_set.sample.json      # 评估集样例
-├── _verify_after_merge.py    # 只读验收脚本（模块、配置、图结构、提示词）
-├── requirements.txt          # 完整依赖（含 ragas）
-├── requirements.runtime.txt  # 运行时依赖（Docker 镜像使用）
-├── Dockerfile · compose.yaml
-├── .env.example              # 配置模板（复制为 .env 后填写）
-├── data/                     # 知识库源文档；上传的文件存放在 data/uploads/
-├── vector_db/                # 自动生成：Milvus 本地库、BM25 语料副本、会话记忆库
-└── docs/                     # 学习指南等补充文档
+├── eval_ragas.py · eval_set.sample.json · _verify_after_merge.py
+├── requirements.txt · requirements.runtime.txt · Dockerfile · compose.yaml · .env.example
+├── data/                     # 知识库源文档；上传的文件在 data/uploads/<doc_id>/
+└── vector_db/                # 自动生成：Milvus 库、BM25 语料、文档登记表、会话记忆
 ```
+
+代码按职责拆分，单个文件不超过 600 行（`_verify_after_merge.py` 会检查）。
 
 ---
 
@@ -164,7 +176,7 @@ python main.py
 # 或 uvicorn main:app --reload --port 8000
 ```
 
-启动后打开 <http://127.0.0.1:8000/docs>，可以在 Swagger UI 里直接调试所有接口。首次启动会下载 Embedding 模型（约 130MB），并构建 BM25 倒排索引。
+启动后打开 <http://127.0.0.1:8000/docs>，可以在 Swagger UI 里直接调试所有接口。首次启动会下载 Embedding 模型（`bge-m3` 约 2.2GB），并构建 BM25 倒排索引。
 
 ### 使用 Docker Compose
 
@@ -201,15 +213,74 @@ docker compose down -v           # 同时删除 Redis / 模型缓存卷（谨慎
 # 1) 查看生效配置和向量库状态
 curl http://127.0.0.1:8000/health
 
-# 2) 批量导入 data/ 下的文档；也可以上传单个文件
-curl -X POST http://127.0.0.1:8000/ingest/directory
-curl -X POST http://127.0.0.1:8000/ingest/file -F "file=@data/paul_graham_essay.txt"
+# 2) 上传文档：立即返回 doc_id，后台排队入库
+curl -X POST http://127.0.0.1:8000/documents -F "file=@data/paul_graham_essay.txt"
+#    或扫描 data/ 目录（新文件、有变化的文件才会入库）
+curl -X POST http://127.0.0.1:8000/documents/scan
 
-# 3) 提问
+# 3) 查看入库进度（status: pending → processing → ready / failed）
+curl http://127.0.0.1:8000/documents
+
+# 4) 提问
 curl -X POST http://127.0.0.1:8000/query \
   -H "Content-Type: application/json" \
   -d '{"question":"作者为什么要学习画画？"}'
 ```
+
+文档管理规则：
+
+- **内容去重**：内容完全相同的文件（哪怕换了文件名）只入库一次，第二次上传返回 `action: duplicate`。
+- **版本替换**：同名上传、内容变了，视为新版本；新版本入库成功后自动删除旧版本，替换过程中检索不中断。
+- **删除**：`DELETE /documents/{doc_id}` 会同时删除向量、BM25 语料和上传的文件。
+- **查看原文**：`GET /documents/{doc_id}/file` 在浏览器里打开原文件；PDF 可加 `#page=N` 跳到引用页。`/query` 返回的 `sources[].doc_id` 就是这里用的 ID。
+- 设置了 `API_TOKEN` 时，所有请求都要加上 `-H "Authorization: Bearer <API_TOKEN>"`。
+
+### 流式问答（SSE）
+
+```bash
+curl -N -X POST http://127.0.0.1:8000/query/stream -H "Content-Type: application/json" \
+  -d '{"question":"RRF 是什么？","session_id":"user-42"}'
+```
+
+会依次收到以下事件：
+
+| 事件 | 数据 | 前端怎么处理 |
+|---|---|---|
+| `step` | `{"node","label"}` | 显示进度，如"检索知识库""联网搜索" |
+| `token` | `{"text"}` | 追加到答案 |
+| `reset` | `{"reason"}` | 清空已显示的答案，后续 token 是新版本（草稿未通过出处核对） |
+| `done` | 与 `/query` 相同的完整结果 | 渲染来源、观测信息 |
+| `error` | `{"detail"}` | 显示错误 |
+
+浏览器端请用 `fetch` 加 `ReadableStream` 读取，因为 `EventSource` 不支持 POST 请求。
+
+### 接入 Open WebUI（零前端开发）
+
+服务提供 OpenAI 兼容接口，任何支持"自定义 OpenAI 地址"的聊天客户端都能直接当前端用。
+
+```bash
+# 方式一：和本服务一起用 Docker Compose 启动（Open WebUI 地址 http://127.0.0.1:3000）
+docker compose --profile ui up -d
+
+# 方式二：已有 Open WebUI 时，在 管理员设置 → 外部连接 → OpenAI API 里添加：
+#   URL：http://<本服务地址>:8000/v1
+#   Key：.env 里的 API_TOKEN
+```
+
+接入后可以选择两个模型：
+
+- `rag-agent`：查本地知识库，需要时联网；
+- `rag-agent-local`：只查本地，不联网。
+
+接入效果：
+
+- 进度以"思考过程"的形式折叠显示；
+- 回答末尾附参考来源；
+- 多轮历史由 Open WebUI 每次随请求带上；
+- 如果想使用服务端记忆（含滚动摘要），可以在请求头里加 `X-Session-Id`。
+
+> **重要：** Open WebUI 默认会用当前模型自动生成对话标题、标签和追问建议。每一次这样的生成都会跑一遍完整的 RAG 流程，浪费调用。
+> 请在"管理员设置 → 界面"里，把"任务模型"设为另一个普通 LLM，或者关闭标题、标签、追问建议的自动生成。
 
 ### 多轮对话（服务端持久化记忆）
 
@@ -265,15 +336,26 @@ CLI 与 HTTP 接口共用同一张状态图和同一个记忆库。默认会话 
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/health` | 健康检查，回显全部生效参数（检索、精排、联网、记忆、上下文预算） |
-| GET | `/metrics` | Prometheus 指标（不在 Swagger 中显示） |
-| POST | `/ingest/file` | 上传单个文档入库（pdf/txt/md/docx/html/htm/csv） |
-| POST | `/ingest/directory` | 把 `data/` 下的所有文档批量入库（追加写入，不去重） |
+| GET | `/health` | 健康检查：生效参数、文档统计、Embedding 维度检查（无需鉴权） |
+| GET | `/metrics` | Prometheus 指标（无需鉴权，不在 Swagger 中显示） |
+| POST | `/query` | 问答，一次性返回；传 `session_id` 启用持久化记忆，`allow_web=false` 不联网 |
+| POST | `/query/stream` | 问答，SSE 流式返回 |
 | POST | `/retrieve` | 只检索不生成，用于调参 |
-| POST | `/query` | 完整问答；传 `session_id` 时启用持久化记忆 |
 | GET | `/sessions/{id}` | 查看某个会话保存的记忆 |
 | DELETE | `/sessions/{id}` | 清除某个会话的记忆 |
-| DELETE | `/index` | 清空向量库 |
+| POST | `/documents` | 上传文档（去重 / 同名替换），后台入库，返回 202 |
+| POST | `/documents/scan` | 扫描 `data/` 目录并入库新文件和有变化的文件 |
+| GET | `/documents` | 文档列表，可按 `status` 过滤 |
+| GET | `/documents/{id}` | 文档详情与入库状态 |
+| GET | `/documents/{id}/file` | 打开原文件 |
+| DELETE | `/documents/{id}` | 删除文档 |
+| POST | `/documents/reindex` | 用当前 Embedding 模型重建全部索引 |
+| DELETE | `/index` | 删除全部文档（`data/` 下的源文件保留，会话记忆不受影响） |
+| GET | `/v1/models` | OpenAI 兼容：模型列表 |
+| POST | `/v1/chat/completions` | OpenAI 兼容：对话（支持 `stream`） |
+| POST | `/ingest/file`、`/ingest/directory` | 旧接口，保留兼容，会同步等待入库完成 |
+
+设置了 `API_TOKEN` 时，除 `/health`、`/metrics` 外的所有接口都需要请求头 `Authorization: Bearer <API_TOKEN>`。
 
 ### `/query` 响应字段
 
@@ -494,7 +576,10 @@ python _verify_after_merge.py
 
 测试覆盖的内容：
 
-- 联网降级路径、空知识库直接联网、联网失败时的提示；
+- 联网降级路径、空知识库直接联网、联网失败时的提示、`allow_web=false` 时不联网；
+- 流式事件契约：逐段输出、草稿未通过核对时的 `reset`、兜底答案补发；
+- OpenAI 兼容接口：消息解析、流式格式、`-local` 模型、`X-Session-Id`、Token 鉴权；
+- 文档管理：内容去重、同名替换旧版本、入库失败清理、删除、后台队列与重启恢复、BM25 语料删除；
 - 上下文预算裁剪；
 - SQLite 读写，以及模拟进程重启后的恢复、TTL 过期；
 - 记忆摘要压缩，以及摘要失败时的降级；
@@ -558,20 +643,30 @@ taskkill /PID <进程号> /F
 
 ### 中文问题检索效果差
 
-默认的 `BAAI/bge-small-en-v1.5` 是英文模型。如果知识库以中文为主，建议换成 `BAAI/bge-m3`。换模型后必须重建向量库，见下方注意事项第 1 条。
+先确认 `/health` 里的 `embedding.model` 是 `BAAI/bge-m3`。如果你的 `.env` 还是从旧模板复制来的 `BAAI/bge-small-en-v1.5`（纯英文模型），中文检索排序会偏。改成 `bge-m3` 后需要重建索引，见下方注意事项第 1 条。
+
+### 启动日志提示"向量库维度与当前模型不一致"
+
+说明换过 Embedding 模型，但索引还是旧模型建的。这时检索会失败，系统会自动降级为联网或拒答。调用 `POST /documents/reindex` 重建即可。
+
+### Open WebUI 里每发一条消息，后台跑了好几次问答
+
+这是 Open WebUI 在用当前模型生成标题、标签和追问建议。处理方法见上文"接入 Open WebUI"一节：设置任务模型，或关闭这些自动生成功能。
 
 ---
 
 ## 注意事项
 
-1. **更换 Embedding 模型后必须重建向量库。** 向量维度变了，collection 结构就对不上。做法是：把 `MILVUS_DROP_OLD` 临时改为 `true`，重启一次，**然后立刻改回 `false`**，否则每次重启都会清空知识库。
+1. **更换 Embedding 模型后必须重建索引。** 向量维度变了，collection 结构就对不上。修改 `EMBEDDING_MODEL` 后重启服务，再调用 `POST /documents/reindex`：系统会清空向量库，把所有已登记的文档用新模型重新入库。
+   - `bge-m3` 约 2.2GB，首次下载较慢，CPU 上入库速度也比 `bge-small` 慢；
+   - 旧版本直接写入、没有登记的数据，重建后需要再执行一次 `POST /documents/scan`。
 
 2. **Milvus 地址的变量名是 `RAG_MILVUS_URI`，不是 `MILVUS_URI`。** pymilvus 3.x 在 import 阶段就会读取 `MILVUS_URI` 并按 `http[s]://` 格式解析，如果值是本地文件路径，会直接报错。
 
-3. **不要单独删除 `vector_db/bm25_corpus.jsonl`。** 它是 BM25 稀疏检索的数据源。删除后 BM25 会**静默失效**，退化为纯向量检索且不报错，很难察觉。
+3. **不要单独删除 `vector_db/` 下的文件。** `bm25_corpus.jsonl` 是 BM25 的数据源，删除后 BM25 会**静默失效**；`documents.sqlite3` 是文档登记表，删除后去重和按文档删除都会失效。需要清空时请调用 `DELETE /index`。
 
-4. **`/ingest/directory` 是追加写入，不去重。** 需要重新入库时，先调用 `DELETE /index`。`DELETE /index` 不会删除会话记忆。
+4. **`DELETE /index` 会删除全部文档**，包括向量、登记表和上传的文件；`data/` 下的源文件保留，会话记忆也不受影响。
 
 5. **`milvus-lite` 的 PyPI 元数据标注为不支持 Windows**，但在本项目的 Windows 环境中实测可用。如果某台机器装不上，改用 Docker 启动 Milvus 服务，并设置 `RAG_MILVUS_URI`。
 
-6. **会话记忆包含用户的对话内容。** 对外提供服务时，应把 `session_id` 与用户鉴权绑定，避免会话被他人猜中并读取；按合规要求设置 `MEMORY_TTL_SECONDS`，并通过 `DELETE /sessions/{id}` 提供"删除对话"的能力。
+6. **对外提供服务前必须设置 `API_TOKEN`**，并把 `session_id` 与用户身份绑定，避免会话被他人猜中并读取。会话记忆包含用户的对话内容：按合规要求设置 `MEMORY_TTL_SECONDS`，并通过 `DELETE /sessions/{id}` 提供"删除对话"的能力。

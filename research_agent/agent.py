@@ -14,7 +14,7 @@
       · 两层循环嵌套，一次提问的 LLM 调用次数和耗时都没有上限可言；
       · 内层 RAG 生成的答案又被外层 LLM 重新改写一遍，出处和忠实性检查结果被稀释。
 
-新版本只有一层 —— 联网搜索被并入 app/rag_chain.py 的状态图（CRAG）：
+新版本只有一层 —— 联网搜索被并入 app/rag 的状态图（CRAG）：
 
     route_question ─(需要实时信息)──────────────────────────► web_search ─┐
         │                                                       ▲         │
@@ -32,6 +32,7 @@ import sys
 import uuid
 from typing import Optional
 
+from app.rag.graph import STEP_LABELS  # 节点中文名，与 HTTP 流式进度事件共用一份
 from research_agent.settings import agent_settings
 
 # Windows 终端默认可能是 GBK，打印中文/emoji 会 UnicodeEncodeError。
@@ -46,20 +47,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("research_agent")
-
-
-# 节点名 -> 终端展示名
-STEP_LABELS = {
-    "route_question": "路由",
-    "transform_query": "查询变换",
-    "retrieve": "本地混合检索",
-    "rerank_documents": "精排",
-    "grade_document": "相关性评分",
-    "rewrite_query": "查询改写",
-    "web_search": "联网搜索",
-    "generate": "生成答案",
-    "check_groundedness": "忠实性检查",
-}
 
 
 class ResearchAgent:
@@ -81,7 +68,7 @@ class ResearchAgent:
     async def _aget_rag(self):
         """懒加载 RAGChain。预热失败时退化为不预热（本地检索失败会自动转联网）。"""
         if self.rag is None:
-            from app.rag_chain import RAGChain
+            from app.rag import RAGChain
 
             try:
                 self.rag = await asyncio.to_thread(RAGChain, True)
@@ -183,7 +170,7 @@ class ResearchAgent:
 
     async def aclose(self) -> None:
         """释放 Tavily 与 Redis 连接池。"""
-        from app.rag_chain import RAGChain
+        from app.rag import RAGChain
 
         await RAGChain.aclose()
 

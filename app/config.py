@@ -3,12 +3,14 @@
 #   2) 混合检索 Hybrid Search（稠密向量 + BM25 稀疏，RRF 融合）
 #   3) 查询变换 Query Transformations（multi-query / HyDE）
 #   4) Reranker（Cohere Rerank 精排）
-# 另外补上了原文件缺失的 RECURSION_LIMIT —— 没有它 rag_chain.answer() 会直接 AttributeError。
+# 另外补上了原文件缺失的 RECURSION_LIMIT —— 没有它 RAGChain.answer() 会直接 AttributeError。
 
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# override=True：让 .env 成为唯一配置来源，覆盖 shell / 系统里残留的同名环境变量。
+# 否则早期手动设置过 EMBEDDING_MODEL=BAAI/bge-m3 之类变量时，.env 里的本地路径会不生效。
+load_dotenv(override=True)
 
 _reserved_uri = os.environ.get("MILVUS_URI", "")
 if _reserved_uri and not _reserved_uri.startswith(("http://", "https://")):
@@ -54,8 +56,10 @@ class Settings:
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", 0.0))
 
     # ------------------------------------------------------------ Embedding
-    # 本次 embedding 模型（本地 HuggingFace，384 维）
-    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+    # 默认 BAAI/bge-m3：多语言（中英混排效果好）、1024 维、最长 8192 token，约 2.2GB，CPU 可跑。
+    # 纯英文知识库、机器内存紧张时可换回 BAAI/bge-small-en-v1.5（384 维，约 130MB）。
+    # 【换模型 = 向量维度变化 = 必须重建索引】调用 POST /documents/reindex 即可一键重建。
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 
     # ------------------------------------------------------------ 向量库（Milvus）
     # 注意环境变量名叫 RAG_MILVUS_URI 而不是 MILVUS_URI，原因见文件开头的踩坑警告。
@@ -126,7 +130,7 @@ class Settings:
     # 最大"检索-评分-改写"循环轮数（防止死循环）
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", 2))
     # LangGraph 单次调用的最大步数上限（图节点执行次数）。
-    # 实际生效值会取它与 rag_chain.required_recursion_limit() 的较大者，
+    # 实际生效值会取它与 required_recursion_limit() 的较大者，
     # 调大 MAX_RETRIES 时不会再因为忘了同步调这里而抛 GraphRecursionError
     RECURSION_LIMIT: int = int(os.getenv("RECURSION_LIMIT", 25))
     DATA_DIR: str = os.getenv("DATA_DIR", "./data")
@@ -190,6 +194,30 @@ class Settings:
     # 每条回答写入存储时的长度上限（字符），防止单条超长答案撑大存储
     MEMORY_STORE_ANSWER_CHARS: int = int(os.getenv("MEMORY_STORE_ANSWER_CHARS", 2000))
 
+    # ------------------------------------------------------------ 文档管理
+    # 文档登记表（去重 / 版本替换 / 入库任务状态）
+    DOCUMENTS_DB_PATH: str = os.getenv(
+        "DOCUMENTS_DB_PATH", os.path.join(VECTOR_DB_PATH, "documents.sqlite3")
+    )
+    # 上传文件存放目录：每个文档一个子目录 uploads/<doc_id>/<文件名>，同名文件不会互相覆盖
+    UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", os.path.join(DATA_DIR, "uploads"))
+    # 单个上传文件的大小上限（MB）
+    MAX_UPLOAD_MB: int = int(os.getenv("MAX_UPLOAD_MB", 50))
+
+    # ------------------------------------------------------------ 接口鉴权
+    # 设置后，除 /health、/metrics 外的接口都要求请求头 Authorization: Bearer <API_TOKEN>。
+    # 对外暴露服务（包括给 Open WebUI 用）时务必设置；留空表示不鉴权（仅限本机开发）。
+    API_TOKEN: str = os.getenv("API_TOKEN", "")
+
+    # ------------------------------------------------------------ OpenAI 兼容接口（/v1）
+    # 对外暴露的模型名。会同时注册一个 "<名称>-local" 模型：只查本地知识库、不联网
+    OPENAI_COMPAT_MODEL: str = os.getenv("OPENAI_COMPAT_MODEL", "rag-agent")
+    # 流式输出时把"正在检索 / 正在联网"等进度放进 delta.reasoning_content
+    # （Open WebUI 等客户端会折叠显示为"思考过程"，不支持的客户端会忽略）
+    OPENAI_COMPAT_SHOW_PROGRESS: bool = _env_bool("OPENAI_COMPAT_SHOW_PROGRESS", "true")
+    # 在回答末尾追加"参考来源"列表（本地文件名/页码，网页标题/链接）
+    OPENAI_COMPAT_APPEND_SOURCES: bool = _env_bool("OPENAI_COMPAT_APPEND_SOURCES", "true")
+
     # ------------------------------------------------------------ LangSmith
     LANGSMITH_TRACING: bool = _env_bool("LANGSMITH_TRACING", "true")
     LANGSMITH_ENDPOINT: str = os.getenv(
@@ -212,6 +240,11 @@ class Settings:
     LLM_CACHE_FAILURE_COOLDOWN_SECONDS: float = float(
         os.getenv("LLM_CACHE_FAILURE_COOLDOWN_SECONDS", "30")
     )
+
+    # ------------------------------------------------------------ Prometheus 指标
+    # false 时完全不挂载指标中间件和 /metrics 端点
+    METRICS_ENABLED: bool = _env_bool("METRICS_ENABLED", "true")
+    METRICS_PATH: str = os.getenv("METRICS_PATH", "/metrics")
 
     # ------------------------------------------------------------ 派生属性
     @property

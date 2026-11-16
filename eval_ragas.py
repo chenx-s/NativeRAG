@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import settings
-from app.rag_chain import RAGChain
+from app.rag import RAGChain
 from app.vector_store import get_embeddings, stats as vector_stats
 
 DEFAULT_DATASET = "eval_set.json"
@@ -158,8 +158,9 @@ def collect_samples(
         if verbose:
             print(f"[{index}/{len(items)}] 提问：{question}")
 
-        # include_documents=True 才会带出完整上下文，否则只有 200 字摘要
-        result = rag.answer(question, include_documents=True)
+        # include_documents=True 才会带出完整上下文，否则只有 200 字摘要。
+        # allow_web=False：评估的是本地 RAG；联网结果随时间变化、不可复现，会污染指标。
+        result = rag.answer(question, include_documents=True, allow_web=False)
 
         contexts = result.get("documents") or []
         if verbose:
@@ -327,10 +328,6 @@ def run_evaluation(
     if limit:
         items = items[:limit]
     print(f"\n评估集：{dataset_path}，共 {len(items)} 条\n")
-
-    # 评估的是本地 RAG 的检索与生成质量；联网结果随时间变化、不可复现，
-    # 会污染 context_recall / faithfulness 等指标，所以评估时关闭联网。
-    settings.WEB_SEARCH_ENABLED = False
 
     rag = RAGChain()
     samples, has_reference = collect_samples(items, rag)

@@ -157,18 +157,18 @@ class MemoryManagerTests(unittest.IsolatedAsyncioTestCase):
 
 class SessionMemoryGraphTests(unittest.IsolatedAsyncioTestCase):
     async def test_second_turn_sees_first_turn(self):
-        from app.rag_chain import RAGChain
+        from app.rag import RAGChain
 
         store = InMemoryMemoryStore()
         rag = RAGChain(warm=False, memory=MemoryManager(store))
         llm = FakeListChatModel(responses=["路由：local\n问题：RRF 融合的公式是什么"])
 
         with (
-            patch("app.rag_chain.settings.QUERY_TRANSFORM", "none"),
-            patch("app.rag_chain.settings.MAX_RETRIES", 0),
-            patch("app.rag_chain.settings.WEB_SEARCH_ENABLED", False),
-            patch("app.rag_chain.amulti_query_search", new=AsyncMock(return_value=[])),
-            patch("app.rag_chain.get_llm", new=lambda **_: llm),
+            patch("app.config.settings.QUERY_TRANSFORM", "none"),
+            patch("app.config.settings.MAX_RETRIES", 0),
+            patch("app.config.settings.WEB_SEARCH_ENABLED", False),
+            patch("app.vector_store.amulti_query_search", new=AsyncMock(return_value=[])),
+            patch("app.rag.llm.get_llm", new=lambda **_: llm),
         ):
             first = await rag.aanswer("什么是 RRF", session_id="s1")
             second = await rag.aanswer("它的公式呢", session_id="s1")
@@ -183,15 +183,15 @@ class SessionMemoryGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([q for q, _ in memory.turns], ["什么是 RRF", "RRF 融合的公式是什么"])
 
     async def test_without_session_nothing_is_stored(self):
-        from app.rag_chain import RAGChain
+        from app.rag import RAGChain
 
         store = InMemoryMemoryStore()
         rag = RAGChain(warm=False, memory=MemoryManager(store))
         with (
-            patch("app.rag_chain.settings.QUERY_TRANSFORM", "none"),
-            patch("app.rag_chain.settings.MAX_RETRIES", 0),
-            patch("app.rag_chain.settings.WEB_SEARCH_ENABLED", False),
-            patch("app.rag_chain.amulti_query_search", new=AsyncMock(return_value=[])),
+            patch("app.config.settings.QUERY_TRANSFORM", "none"),
+            patch("app.config.settings.MAX_RETRIES", 0),
+            patch("app.config.settings.WEB_SEARCH_ENABLED", False),
+            patch("app.vector_store.amulti_query_search", new=AsyncMock(return_value=[])),
         ):
             await rag.aanswer("单轮问题")
 

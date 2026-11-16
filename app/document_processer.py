@@ -6,7 +6,7 @@
 #   磁盘文件 --> [本文件] load_document / load_directory
 #            --> [本文件] split_documents（切块）
 #            --> vector_store.add_documents（BGE 向量化 + 写入 Milvus）
-#            --> rag_chain（检索 + 生成）
+#            --> app/rag（检索 + 生成）
 
 import asyncio
 
@@ -172,6 +172,10 @@ def split_documents(docs: List[Document]) -> List[Document]:
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=settings.CHUNK_SIZE,
         chunk_overlap=settings.CHUNK_OVERLAP,
+        # 从粗到细的分隔符。默认列表只有 ["\n\n", "\n", " ", ""]，
+        # 中文没有空格，长段落会被直接按字符数拦腰截断；
+        # 补上中英文句末/分句标点，让切分尽量落在句子边界上。
+        separators=["\n\n", "\n", "。", "！", "？", "；", ". ", "! ", "? ", "; ", "，", ", ", " ", ""],
         # add_start_index=True 会在 metadata 里写入 "start_index"，
         # 即该块在原文中的起始字符位置。
         # 用途：升级后 BM25 语料副本靠 (source + 内容hash) 做去重键，
